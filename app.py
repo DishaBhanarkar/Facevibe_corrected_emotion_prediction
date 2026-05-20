@@ -1,7 +1,11 @@
 import os
 import sys
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'   # silence TF info logs
+# Limit TF to 1 thread — prevents memory spike on free tier
+os.environ['TF_NUM_INTEROP_THREADS'] = '1'
+os.environ['TF_NUM_INTRAOP_THREADS'] = '1'
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -12,21 +16,32 @@ app = Flask(__name__)
 CORS(app)
 
 # =====================
-# LOAD MODEL — with clear error messages
+# LOAD MODEL ONCE at startup
 # =====================
 print("Loading model...", flush=True)
-
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "emotion_model.keras")
 
 if not os.path.exists(MODEL_PATH):
-    print(f"ERROR: Model file not found at {MODEL_PATH}", flush=True)
-    print(f"Files in directory: {os.listdir(os.path.dirname(__file__))}", flush=True)
+    print(f"ERROR: Model not found. Files here: {os.listdir('.')}", flush=True)
     sys.exit(1)
 
 try:
-    from tensorflow.keras.models import load_model
-    model = load_model(MODEL_PATH, compile=False)
-    print("Model loaded OK!", flush=True)
+    import tensorflow as tf
+
+    # Limit memory growth
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+
+    model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+
+    # ✅ Warm up the model with a dummy prediction
+    # First prediction is always slow — do it at startup not on user's request
+    dummy = np.zeros((1, 48, 48, 3), dtype="float32")
+    model.predict(dummy, verbose=0)
+    print("Model loaded and warmed up!", flush=True)
+
 except Exception as e:
     print(f"ERROR loading model: {e}", flush=True)
     sys.exit(1)
